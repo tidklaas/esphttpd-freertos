@@ -34,7 +34,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiLed(HttpdConnData *connData) {
 	len=httpdFindArg(connData->post.buff, "led", buff, sizeof(buff));
 	if (len!=0) {
 		currLedState=atoi(buff);
-		ioLed(currLedState);
+		ioLed(LED_CGI, currLedState);
 	}
 
 	httpdRedirect(connData, "led.tpl");
@@ -55,6 +55,9 @@ CgiStatus ICACHE_FLASH_ATTR tplLed(HttpdConnData *connData, char *token, void **
 		} else {
 			strcpy(buff, "off");
 		}
+	}
+	if (strcmp(token, "ledgpio")==0) {
+		sprintf(buff, "%u", LED_CGI);
 	}
 	httpdSend(connData, buff, -1);
 	return HTTPD_CGI_DONE;

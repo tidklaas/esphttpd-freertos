@@ -11,6 +11,7 @@
 This is example code for the esphttpd library. It's a small-ish demo showing off
 the server, including WiFi connection management capabilities, some IO etc.
 */
+#include "sdkconfig.h"
 
 #include <libesphttpd/esp.h>
 #include "libesphttpd/httpd.h"
@@ -38,11 +39,24 @@ the server, including WiFi connection management capabilities, some IO etc.
 #ifdef ESP32
 #include "freertos/event_groups.h"
 #include "esp_log.h"
-#include "esp_event_loop.h"
+
 #include "nvs_flash.h"
+#include "esp_err.h"
+#include "esp_event_loop.h"
+#include "esp_event.h"
 #include "tcpip_adapter.h"
 
 
+char my_hostname[16] = "esphttpd";
+
+/* The examples use simple WiFi configuration that you can set via
+   'make menuconfig'.
+
+   If you'd rather not, just change the below entries to strings with
+   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
+*/
+#define EXAMPLE_WIFI_SSID      CONFIG_EXAMPLE_WIFI_SSID
+#define EXAMPLE_WIFI_PASS      CONFIG_EXAMPLE_WIFI_PASSWORD
 #endif
 
 #define TAG "user_main"
@@ -184,80 +198,103 @@ HttpdBuiltInUrl builtInUrls[]={
 
 #ifdef ESP32
 
-static EventGroupHandle_t wifi_ap_event_group;
-static EventGroupHandle_t wifi_sta_event_group;
 
-/* The event group allows multiple bits for each event,
-   but we only care about one event - are we connected
-   to the AP with an IP? */
-const static int CONNECTED_BIT = BIT0;
-
-static esp_err_t wifi_event_handler(void *ctx, system_event_t *event)
+static esp_err_t app_event_handler(void *ctx, system_event_t *event)
 {
-    switch(event->event_id) {
-    case SYSTEM_EVENT_STA_START:
-        /* Calling this unconditionally would interfere with the WiFi CGI. */
-        // esp_wifi_connect();
-        break;
-    case SYSTEM_EVENT_STA_GOT_IP:
-        xEventGroupSetBits(wifi_sta_event_group, CONNECTED_BIT);
-        break;
-    case SYSTEM_EVENT_STA_CONNECTED:
-        break;
-    case SYSTEM_EVENT_STA_DISCONNECTED:
-        xEventGroupClearBits(wifi_sta_event_group, CONNECTED_BIT);
-        /* This is a workaround as ESP32 WiFi libs don't currently
+	switch(event->event_id) {
+	case SYSTEM_EVENT_ETH_START:
+		tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_ETH, my_hostname);
+		break;
+	case SYSTEM_EVENT_STA_START:
+		tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, my_hostname);
+		// esp_wifi_connect(); /* Calling this unconditionally would interfere with the WiFi CGI. */
+		break;
+	case SYSTEM_EVENT_STA_GOT_IP:
+	{
+		tcpip_adapter_ip_info_t sta_ip_info;
+		wifi_config_t sta_conf;
+		printf("~~~~~STA~~~~~" "\n");
+		if (esp_wifi_get_config(TCPIP_ADAPTER_IF_STA, &sta_conf) == ESP_OK) {
+			printf("ssid: %s" "\n", sta_conf.sta.ssid);
+		}
+
+		if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &sta_ip_info) == ESP_OK) {
+			printf("IP:" IPSTR "\n", IP2STR(&sta_ip_info.ip));
+			printf("MASK:" IPSTR "\n", IP2STR(&sta_ip_info.netmask));
+			printf("GW:" IPSTR "\n", IP2STR(&sta_ip_info.gw));
+		}
+		printf("~~~~~~~~~~~~~" "\n");
+	}
+	set_status_ind_wifi(WIFI_STATE_CONN);
+	break;
+	case SYSTEM_EVENT_STA_CONNECTED:
+		break;
+	case SYSTEM_EVENT_STA_DISCONNECTED:
+		/* This is a workaround as ESP32 WiFi libs don't currently
            auto-reassociate. */
-        /* Skip reconnect if disconnect was deliberate or authentication      *\
+		/* Skip reconnect if disconnect was deliberate or authentication      *\
         \* failed.                                                            */
-        switch(event->event_info.disconnected.reason){
-        case WIFI_REASON_ASSOC_LEAVE:
-        case WIFI_REASON_AUTH_FAIL:
-            break;
-        default:
-            esp_wifi_connect();
-            break;
-        }
-        break;
-    case SYSTEM_EVENT_AP_START:
-    {
-        tcpip_adapter_ip_info_t ap_ip_info;
-        if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ap_ip_info) == 0) {
-            ESP_LOGI(TAG, "~~~~~~~~~~~");
-            ESP_LOGI(TAG, "IP:" IPSTR, IP2STR(&ap_ip_info.ip));
-            ESP_LOGI(TAG, "MASK:" IPSTR, IP2STR(&ap_ip_info.netmask));
-            ESP_LOGI(TAG, "GW:" IPSTR, IP2STR(&ap_ip_info.gw));
-            ESP_LOGI(TAG, "~~~~~~~~~~~");
-        }
-    }
-        break;
-    case SYSTEM_EVENT_AP_STACONNECTED:
-        ESP_LOGI(TAG, "station:" MACSTR" join,AID=%d\n",
-                MAC2STR(event->event_info.sta_connected.mac),
-                event->event_info.sta_connected.aid);
-        xEventGroupSetBits(wifi_ap_event_group, CONNECTED_BIT);
-        break;
-    case SYSTEM_EVENT_AP_STADISCONNECTED:
-        ESP_LOGI(TAG, "station:" MACSTR"leave,AID=%d\n",
-                MAC2STR(event->event_info.sta_disconnected.mac),
-                event->event_info.sta_disconnected.aid);
-        xEventGroupClearBits(wifi_ap_event_group, CONNECTED_BIT);
-        break;
-    case SYSTEM_EVENT_SCAN_DONE:
-        break;
-    default:
-        break;
-    }
+		switch(event->event_info.disconnected.reason){
+		case WIFI_REASON_ASSOC_LEAVE:
+		case WIFI_REASON_AUTH_FAIL:
+			break;
+		default:
+			esp_wifi_connect();
+			break;
+		}
+		break;
+		case SYSTEM_EVENT_AP_START:
+		{
+			tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_AP, my_hostname);
+			tcpip_adapter_ip_info_t ap_ip_info;
+			wifi_config_t ap_conf;
+			printf("~~~~~AP~~~~~" "\n");
+			if (esp_wifi_get_config(TCPIP_ADAPTER_IF_AP, &ap_conf) == ESP_OK) {
+				printf("ssid: %s" "\n", ap_conf.ap.ssid);
+				if (ap_conf.ap.authmode != WIFI_AUTH_OPEN) printf("pass: %s" "\n", ap_conf.ap.password);
+			}
 
-    /* Forward event to to the WiFi CGI module */
-    cgiWifiEventCb(event);
+			if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ap_ip_info) == ESP_OK) {
+				printf("IP:" IPSTR "\n", IP2STR(&ap_ip_info.ip));
+				printf("MASK:" IPSTR "\n", IP2STR(&ap_ip_info.netmask));
+				printf("GW:" IPSTR "\n", IP2STR(&ap_ip_info.gw));
+			}
+			printf("~~~~~~~~~~~~" "\n");
+			set_status_ind_wifi(WIFI_STATE_AP);
+		}
+		break;
+		case SYSTEM_EVENT_AP_STACONNECTED:
+			ESP_LOGI(TAG, "station:" MACSTR" join,AID=%d",
+					MAC2STR(event->event_info.sta_connected.mac),
+					event->event_info.sta_connected.aid);
 
-    return ESP_OK;
+			set_status_ind_wifi(WIFI_STATE_CONN);
+			break;
+		case SYSTEM_EVENT_AP_STADISCONNECTED:
+			ESP_LOGI(TAG, "station:" MACSTR"leave,AID=%d",
+					MAC2STR(event->event_info.sta_disconnected.mac),
+					event->event_info.sta_disconnected.aid);
+
+			wifi_sta_list_t sta_list;
+			ESP_ERROR_CHECK( esp_wifi_ap_get_sta_list(&sta_list));
+			if (sta_list.num == 0) set_status_ind_wifi(WIFI_STATE_AP); // no clients left, change blink indication to AP
+			break;
+		case SYSTEM_EVENT_SCAN_DONE:
+
+			break;
+		default:
+			break;
+	}
+
+	/* Forward event to to the WiFi CGI module */
+	cgiWifiEventCb(event);
+
+	return ESP_OK;
 }
 
 
 //Simple task to connect to an access point
-void ICACHE_FLASH_ATTR init_wifi(bool modeAP) {
+void init_wifi(bool modeAP) {
 	esp_err_t result;
 
 	result = nvs_flash_init();
@@ -270,14 +307,11 @@ void ICACHE_FLASH_ATTR init_wifi(bool modeAP) {
 	}
 	ESP_ERROR_CHECK(result);
 
-	wifi_sta_event_group = xEventGroupCreate();
-	wifi_ap_event_group = xEventGroupCreate();
-
 	// Initialise wifi configuration CGI
 	result = initCgiWifi();
 	ESP_ERROR_CHECK(result);
 
-	ESP_ERROR_CHECK( esp_event_loop_init(wifi_event_handler, NULL) );
+	ESP_ERROR_CHECK( esp_event_loop_init(app_event_handler, NULL) );
 
 	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
@@ -306,8 +340,8 @@ void ICACHE_FLASH_ATTR init_wifi(bool modeAP) {
 		//Connect to the defined access point.
 		wifi_config_t config;
 		memset(&config, 0, sizeof(config));
-		sprintf((char*)config.sta.ssid, "RouterSSID");			// @TODO: Changeme
-		sprintf((char*)config.sta.password, "RouterPassword"); 	// @TODO: Changeme
+		sprintf((char*)config.sta.ssid, EXAMPLE_WIFI_SSID);
+		sprintf((char*)config.sta.password, EXAMPLE_WIFI_PASS);
 		esp_wifi_set_config(WIFI_IF_STA, &config);
 		esp_wifi_connect();
 	}
