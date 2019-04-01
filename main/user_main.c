@@ -16,9 +16,13 @@ the server, including WiFi connection management capabilities, some IO etc.
 #include <libesphttpd/esp.h>
 #include "libesphttpd/httpd.h"
 #include "io.h"
+
+#ifdef CONFIG_ESPHTTPD_USE_ESPFS
 #include "espfs.h"
 #include "espfs_image.h"
 #include "libesphttpd/httpd-espfs.h"
+#endif // CONFIG_ESPHTTPD_USE_ESPFS
+
 #include "cgi.h"
 #include "libesphttpd/cgiwifi.h"
 #include "libesphttpd/cgiflash.h"
@@ -365,7 +369,9 @@ void user_init(void) {
 // FIXME: Re-enable this when capdns is fixed for esp32
 //	captdnsInit();
 
+#ifdef CONFIG_ESPHTTPD_USE_ESPFS
 	espFsInit((void*)(image_espfs_start));
+#endif // CONFIG_ESPHTTPD_USE_ESPFS
 
 	tcpip_adapter_init();
 	httpdFreertosInit(&httpdFreertosInstance,
