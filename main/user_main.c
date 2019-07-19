@@ -35,6 +35,10 @@ the server, including WiFi connection management capabilities, some IO etc.
 
 #include "esp_wifi.h"
 
+#if defined(CONFIG_WMNGR_ENABLED)
+#include "wifi_manager.h"
+#endif /* defined(CONFIG_WMNGR_ENABLED) */
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -173,6 +177,7 @@ HttpdBuiltInUrl builtInUrls[]={
 	ROUTE_CGI_ARG("/flash/erase", cgiEraseFlash, &uploadParams),
 	ROUTE_CGI("/flash/reboot", cgiRebootFirmware),
 
+#if defined(CONFIG_WMNGR_ENABLED)
 	//Routines to make the /wifi URL and everything beneath it work.
 //Enable the line below to protect the WiFi configuration with an username/password combo.
 //	{"/wifi/*", authBasic, myPassFn},
@@ -185,6 +190,7 @@ HttpdBuiltInUrl builtInUrls[]={
 	ROUTE_CGI("/wifi/connstatus.cgi", cgiWiFiConnStatus),
 	ROUTE_CGI("/wifi/setmode.cgi", cgiWiFiSetMode),
 	ROUTE_CGI("/wifi/startwps.cgi", cgiWiFiStartWps),
+#endif /* defined(CONFIG_WMNGR_ENABLED) */
 
 	ROUTE_REDIRECT("/websocket", "/websocket/index.html"),
 	ROUTE_WS("/websocket/ws.cgi", myWebsocketConnect),
@@ -203,6 +209,54 @@ HttpdBuiltInUrl builtInUrls[]={
 #ifdef ESP32
 
 
+static void dump_sta_info(void)
+{
+	tcpip_adapter_ip_info_t sta_ip_info;
+	wifi_config_t sta_conf;
+
+	printf("~~~~~STA~~~~~" "\n");
+	if (esp_wifi_get_config(TCPIP_ADAPTER_IF_STA, &sta_conf) == ESP_OK) {
+		printf("ssid: %s" "\n", sta_conf.sta.ssid);
+	} else {
+		printf("Error fetching WiFi config.\n");
+	}
+
+	if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &sta_ip_info) == ESP_OK) {
+		printf("IP:" IPSTR "\n", IP2STR(&sta_ip_info.ip));
+		printf("MASK:" IPSTR "\n", IP2STR(&sta_ip_info.netmask));
+		printf("GW:" IPSTR "\n", IP2STR(&sta_ip_info.gw));
+	} else {
+		printf("Error fetching IP info.\n");
+	}
+	printf("~~~~~~~~~~~~~" "\n");
+}
+
+static void dump_ap_info(void)
+{
+	tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_AP, my_hostname);
+	tcpip_adapter_ip_info_t ap_ip_info;
+	wifi_config_t ap_conf;
+
+	printf("~~~~~AP~~~~~" "\n");
+	if (esp_wifi_get_config(TCPIP_ADAPTER_IF_AP, &ap_conf) == ESP_OK) {
+		printf("ssid: %s" "\n", ap_conf.ap.ssid);
+		if (ap_conf.ap.authmode != WIFI_AUTH_OPEN){
+			printf("pass: %s" "\n", ap_conf.ap.password);
+		}
+	} else {
+		printf("Error fetching WiFi config.\n");
+	}
+
+	if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ap_ip_info) == ESP_OK) {
+		printf("IP:" IPSTR "\n", IP2STR(&ap_ip_info.ip));
+		printf("MASK:" IPSTR "\n", IP2STR(&ap_ip_info.netmask));
+		printf("GW:" IPSTR "\n", IP2STR(&ap_ip_info.gw));
+	} else {
+		printf("Error fetching IP info.\n");
+	}
+	printf("~~~~~~~~~~~~" "\n");
+}
+
 static esp_err_t app_event_handler(void *ctx, system_event_t *event)
 {
 	switch(event->event_id) {
@@ -211,112 +265,61 @@ static esp_err_t app_event_handler(void *ctx, system_event_t *event)
 		break;
 	case SYSTEM_EVENT_STA_START:
 		tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, my_hostname);
-		// esp_wifi_connect(); /* Calling this unconditionally would interfere with the WiFi CGI. */
+#if !defined(CONFIG_WMNGR_ENABLED)
+		esp_wifi_connect();
+#endif /* !defined(CONFIG_WMNGR_ENABLED) */
 		break;
 	case SYSTEM_EVENT_STA_GOT_IP:
-	{
-		tcpip_adapter_ip_info_t sta_ip_info;
-		wifi_config_t sta_conf;
-		printf("~~~~~STA~~~~~" "\n");
-		if (esp_wifi_get_config(TCPIP_ADAPTER_IF_STA, &sta_conf) == ESP_OK) {
-			printf("ssid: %s" "\n", sta_conf.sta.ssid);
-		}
-
-		if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_STA, &sta_ip_info) == ESP_OK) {
-			printf("IP:" IPSTR "\n", IP2STR(&sta_ip_info.ip));
-			printf("MASK:" IPSTR "\n", IP2STR(&sta_ip_info.netmask));
-			printf("GW:" IPSTR "\n", IP2STR(&sta_ip_info.gw));
-		}
-		printf("~~~~~~~~~~~~~" "\n");
-	}
-	set_status_ind_wifi(WIFI_STATE_CONN);
-	break;
+		dump_sta_info();
+		set_status_ind_wifi(WIFI_STATE_CONN);
+		break;
 	case SYSTEM_EVENT_STA_CONNECTED:
 		break;
 	case SYSTEM_EVENT_STA_DISCONNECTED:
-		/* This is a workaround as ESP32 WiFi libs don't currently
-           auto-reassociate. */
-		/* Skip reconnect if disconnect was deliberate or authentication      *\
-        \* failed.                                                            */
-		switch(event->event_info.disconnected.reason){
-		case WIFI_REASON_ASSOC_LEAVE:
-		case WIFI_REASON_AUTH_FAIL:
-			break;
-		default:
-			esp_wifi_connect();
-			break;
-		}
+#if !defined(CONFIG_WMNGR_ENABLED)
+		/* This is a workaround as ESP32 WiFi libs don't currently *\
+		\* auto-reassociate.                                       */
+		esp_wifi_connect();
+#endif /* !defined(CONFIG_WMNGR_ENABLED) */
 		break;
-		case SYSTEM_EVENT_AP_START:
+	case SYSTEM_EVENT_AP_START:
+		dump_ap_info();
+		set_status_ind_wifi(WIFI_STATE_AP);
+		break;
+	case SYSTEM_EVENT_AP_STACONNECTED:
+		ESP_LOGI(TAG, "station:" MACSTR" join,AID=%d",
+				MAC2STR(event->event_info.sta_connected.mac),
+				event->event_info.sta_connected.aid);
+
+		set_status_ind_wifi(WIFI_STATE_CONN);
+		break;
+	case SYSTEM_EVENT_AP_STADISCONNECTED:
+		ESP_LOGI(TAG, "station:" MACSTR"leave,AID=%d",
+				MAC2STR(event->event_info.sta_disconnected.mac),
+				event->event_info.sta_disconnected.aid);
+
+/* FIXME: Handle WiFi Manager transition from AP+STA to AP-only mode. */
+#if !defined(CONFIG_WMNGR_ENABLED)
 		{
-			tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_AP, my_hostname);
-			tcpip_adapter_ip_info_t ap_ip_info;
-			wifi_config_t ap_conf;
-			printf("~~~~~AP~~~~~" "\n");
-			if (esp_wifi_get_config(TCPIP_ADAPTER_IF_AP, &ap_conf) == ESP_OK) {
-				printf("ssid: %s" "\n", ap_conf.ap.ssid);
-				if (ap_conf.ap.authmode != WIFI_AUTH_OPEN) printf("pass: %s" "\n", ap_conf.ap.password);
-			}
-
-			if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &ap_ip_info) == ESP_OK) {
-				printf("IP:" IPSTR "\n", IP2STR(&ap_ip_info.ip));
-				printf("MASK:" IPSTR "\n", IP2STR(&ap_ip_info.netmask));
-				printf("GW:" IPSTR "\n", IP2STR(&ap_ip_info.gw));
-			}
-			printf("~~~~~~~~~~~~" "\n");
-			set_status_ind_wifi(WIFI_STATE_AP);
-		}
-		break;
-		case SYSTEM_EVENT_AP_STACONNECTED:
-			ESP_LOGI(TAG, "station:" MACSTR" join,AID=%d",
-					MAC2STR(event->event_info.sta_connected.mac),
-					event->event_info.sta_connected.aid);
-
-			set_status_ind_wifi(WIFI_STATE_CONN);
-			break;
-		case SYSTEM_EVENT_AP_STADISCONNECTED:
-			ESP_LOGI(TAG, "station:" MACSTR"leave,AID=%d",
-					MAC2STR(event->event_info.sta_disconnected.mac),
-					event->event_info.sta_disconnected.aid);
-
 			wifi_sta_list_t sta_list;
 			ESP_ERROR_CHECK( esp_wifi_ap_get_sta_list(&sta_list));
-			if (sta_list.num == 0) set_status_ind_wifi(WIFI_STATE_AP); // no clients left, change blink indication to AP
-			break;
-		case SYSTEM_EVENT_SCAN_DONE:
-
-			break;
-		default:
-			break;
+			if (sta_list.num == 0) {
+				/* No clients left, change blink indication to AP */
+				set_status_ind_wifi(WIFI_STATE_AP);
+			}
+		}
+#endif /* !defined(CONFIG_WMNGR_ENABLED) */
+		break;
+	default:
+		break;
 	}
-
-	/* Forward event to to the WiFi CGI module */
-	cgiWifiEventCb(event);
 
 	return ESP_OK;
 }
 
-
+#if !defined(CONFIG_WMNGR_ENABLED)
 //Simple task to connect to an access point
 void init_wifi(bool modeAP) {
-	esp_err_t result;
-
-	result = nvs_flash_init();
-	if(   result == ESP_ERR_NVS_NO_FREE_PAGES
-	   || result == ESP_ERR_NVS_NEW_VERSION_FOUND)
-	{
-		ESP_LOGI(TAG, "Erasing NVS");
-		nvs_flash_erase();
-		result = nvs_flash_init();
-	}
-	ESP_ERROR_CHECK(result);
-
-	// Initialise wifi configuration CGI
-	result = initCgiWifi();
-	ESP_ERROR_CHECK(result);
-
-	ESP_ERROR_CHECK( esp_event_loop_init(app_event_handler, NULL) );
-
 	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
 	ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
@@ -352,13 +355,17 @@ void init_wifi(bool modeAP) {
 
 	ESP_ERROR_CHECK( esp_wifi_start() );
 }
-#endif
+#endif /* defined(CONFIG_WMNGR_ENABLED) */
+#endif /* ESP32 */
 
 //Main routine. Initialize stdout, the I/O, filesystem and the webserver and we're done.
 #if ESP32
 void app_main(void) {
 #else
 void user_init(void) {
+#endif
+#if defined(ESP32)
+	esp_err_t result;
 #endif
 
 #ifndef ESP32
@@ -373,6 +380,20 @@ void user_init(void) {
 	espFsInit((void*)(image_espfs_start));
 #endif // CONFIG_ESPHTTPD_USE_ESPFS
 
+#if defined(ESP32)
+	result = nvs_flash_init();
+	if(result == ESP_ERR_NVS_NO_FREE_PAGES
+	|| result == ESP_ERR_NVS_NEW_VERSION_FOUND)
+	{
+		ESP_LOGI(TAG, "Erasing NVS");
+		nvs_flash_erase();
+		result = nvs_flash_init();
+	}
+	ESP_ERROR_CHECK(result);
+
+	ESP_ERROR_CHECK( esp_event_loop_init(app_event_handler, NULL) );
+#endif /* defined(ESP32) */
+
 	tcpip_adapter_init();
 	httpdFreertosInit(&httpdFreertosInstance,
 	                  builtInUrls,
@@ -382,8 +403,11 @@ void user_init(void) {
 	                  HTTPD_FLAG_NONE);
 	httpdFreertosStart(&httpdFreertosInstance);
 
+#if defined(CONFIG_WMNGR_ENABLED)
+	ESP_ERROR_CHECK(esp_wmngr_init());
+#else
 	init_wifi(true); // Supply false for STA mode
-
+#endif
 	xTaskCreate(websocketBcast, "wsbcast", 3000, NULL, 3, NULL);
 
 	printf("\nReady\n");

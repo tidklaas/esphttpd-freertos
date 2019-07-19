@@ -1,6 +1,10 @@
-[submodule "components/libesphttpd"]
-	path = components/libesphttpd
-	url = https://github.com/chmorgan/libesphttpd.git
 [submodule "components/espfs"]
 	path = components/espfs
 	url = https://github.com/jkent/esp32-espfs.git
+[submodule "libesphttpd"]
+	path = components/libesphttpd
+	url = https://github.com/tidklaas/libesphttpd.git
+	branch = wifi_manager
+[submodule "components/wifi_manager"]
+	path = components/wifi_manager
+	url = https://github.com/tidklaas/esp32_wifi_manager.git
